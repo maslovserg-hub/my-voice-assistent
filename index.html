@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Голосовой ассистент</title>
+    <style>
+        body {
+            background-color: #121212;
+            color: #ffffff;
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        header {
+            background: linear-gradient(45deg, #ff6600, #ff9933);
+            padding: 20px;
+            text-align: center;
+        }
+        section {
+            padding: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .accent {
+            color: #ff6600;
+        }
+        button {
+            background-color: #ff6600;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        button:hover {
+            background-color: #ff9933;
+        }
+        @media (max-width: 600px) {
+            section {
+                padding: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Ваш личный голосовой помощник</h1>
+        <p>Удобный ассистент для повседневных задач</p>
+    </header>
+    <section id="intro">
+        <h2>Введение</h2>
+        <p>Голосовой ассистент помогает с командами, напоминаниями и интеграциями.</p>
+    </section>
+    <section id="features">
+        <h2>Функции</h2>
+        <ul>
+            <li>Распознавание речи</li>
+            <li>Интеграция с сервисами</li>
+            <li>Персонализация</li>
+        </ul>
+    </section>
+    <section id="demo">
+        <h2>Демо голосового ввода</h2>
+        <p>Нажмите кнопку и произнесите текст для вставки в поле ниже.</p>
+        <textarea id="voice-input" placeholder="Текст будет вставлен сюда..." rows="4" style="width: 100%; background-color: #1e1e1e; color: #ffffff; border: 1px solid #ff6600; padding: 10px; border-radius: 5px;"></textarea>
+        <br><br>
+        <button id="start-voice">Начать голосовой ввод</button>
+        <button id="stop-voice" style="display: none;">Остановить</button>
+        <p id="status"></p>
+    </section>
+    <section id="reviews">
+        <h2>Отзывы</h2>
+        <p>"Очень удобно!" – Пользователь</p>
+    </section>
+    <section id="contacts">
+        <h2>Контакты</h2>
+        <form>
+            <input type="email" placeholder="Email" required>
+            <textarea placeholder="Сообщение"></textarea>
+            <button type="submit">Отправить</button>
+        </form>
+    </section>
+    <script>
+        // Проверка поддержки SpeechRecognition
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            document.getElementById('status').textContent = 'Ваш браузер не поддерживает голосовой ввод.';
+        } else {
+            const recognition = new SpeechRecognition();
+            recognition.lang = 'ru-RU'; // Русский язык
+            recognition.continuous = false;
+            recognition.interimResults = false;
+
+            const startBtn = document.getElementById('start-voice');
+            const stopBtn = document.getElementById('stop-voice');
+            const textarea = document.getElementById('voice-input');
+            const status = document.getElementById('status');
+
+            startBtn.addEventListener('click', () => {
+                recognition.start();
+                status.textContent = 'Слушаю...';
+                startBtn.style.display = 'none';
+                stopBtn.style.display = 'inline';
+            });
+
+            stopBtn.addEventListener('click', () => {
+                recognition.stop();
+                status.textContent = '';
+                startBtn.style.display = 'inline';
+                stopBtn.style.display = 'none';
+            });
+
+            recognition.onresult = (event) => {
+                const transcript = event.results[0][0].transcript;
+                textarea.value += transcript + ' ';
+                status.textContent = 'Текст вставлен!';
+                setTimeout(() => {
+                    status.textContent = '';
+                    startBtn.style.display = 'inline';
+                    stopBtn.style.display = 'none';
+                }, 2000);
+            };
+
+            recognition.onerror = (event) => {
+                status.textContent = 'Ошибка: ' + event.error;
+                startBtn.style.display = 'inline';
+                stopBtn.style.display = 'none';
+            };
+
+            recognition.onend = () => {
+                status.textContent = '';
+                startBtn.style.display = 'inline';
+                stopBtn.style.display = 'none';
+            };
+        }
+    </script>
+</body>
+</html>
