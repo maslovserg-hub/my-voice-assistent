@@ -304,11 +304,16 @@ class Overlay:
 overlay = Overlay()
 
 # ── Логика ───────────────────────────────────────────────────────────────────
+def normalize(audio):
+    peak = np.max(np.abs(audio))
+    return audio / peak * 0.95 if peak > 0.01 else audio
+
 def transcribe_and_type(audio):
     global cancelled
     audio = trim_end(audio)
     if len(audio) < SAMPLE_RATE * 0.3:
         return
+    audio = normalize(audio)
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False, dir=CACHE_DIR) as f:
         tmp = f.name
     try:
