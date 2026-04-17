@@ -90,65 +90,98 @@ def run_setup_wizard() -> str:
         else:
             status_var.set("Модель не найдена в этой папке. Нужны файлы v3_e2e_ctc.*")
 
+    CDN = "https://cdn.chatwm.opensmodel.sberdevices.ru/GigaAM"
+    MODEL_FILES = [
+        (f"{MODEL_NAME}.ckpt",            422 * 1024 * 1024),
+        (f"{MODEL_NAME}_tokenizer.model",   1 * 1024 * 1024),
+    ]
+
+    def _purge_cache(cache):
+        for fname, _ in MODEL_FILES:
+            fp = os.path.join(cache, fname)
+            if os.path.isfile(fp):
+                try: os.unlink(fp)
+                except Exception: pass
+
+    def _download_file_direct(url, dest, total_bytes, on_progress):
+        import urllib.request as ur
+        tmp = dest + ".part"
+        try:
+            req = ur.Request(url, headers={"User-Agent": "VoiceType/1.0"})
+            with ur.urlopen(req, timeout=60) as src, open(tmp, "wb") as out:
+                downloaded = 0
+                while True:
+                    buf = src.read(65536)
+                    if not buf:
+                        break
+                    out.write(buf)
+                    downloaded += len(buf)
+                    on_progress(downloaded, total_bytes)
+        except Exception as e:
+            if os.path.isfile(tmp):
+                os.unlink(tmp)
+            raise
+        os.replace(tmp, dest)
+
+    def _show_manual():
+        import webbrowser
+        status_var.set("Скачайте вручную и положите в C:/gigaam_cache")
+        webbrowser.open(f"{CDN}/{MODEL_NAME}.ckpt")
+
     def download():
         btn_dl.config(state="disabled")
         btn_br.config(state="disabled")
         cache = DEFAULT_CACHE
         os.makedirs(cache, exist_ok=True)
-        # Удалить пустые файлы от предыдущей попытки
-        for fname in (f"{MODEL_NAME}.ckpt", f"{MODEL_NAME}_tokenizer.model"):
-            fp = os.path.join(cache, fname)
-            if os.path.isfile(fp) and os.path.getsize(fp) < 1_000:
-                os.unlink(fp)
 
-        TARGET_BYTES = 650 * 1024 * 1024
-        ckpt_path = os.path.join(cache, f"{MODEL_NAME}.ckpt")
-        done = threading.Event()
+        total_bytes = sum(b for _, b in MODEL_FILES)
+        downloaded_so_far = [0]
 
-        def _monitor():
-            while not done.is_set():
-                try:
-                    if os.path.isfile(ckpt_path):
-                        sz = os.path.getsize(ckpt_path)
-                        mb = sz / 1024 / 1024
-                        frac = min(sz / TARGET_BYTES, 0.99)
-                        win.after(0, lambda f=frac, m=mb: (
-                            update_progress(f),
-                            status_var.set(f"Скачивание: {m:.0f} / ~650 МБ")
-                        ))
-                except Exception:
-                    pass
-                time.sleep(1)
+        def on_progress(got, total_file):
+            mb = (downloaded_so_far[0] + got) / 1024 / 1024
+            frac = min((downloaded_so_far[0] + got) / total_bytes, 0.99)
+            win.after(0, lambda f=frac, m=mb: (
+                update_progress(f),
+                status_var.set(f"Скачивание: {m:.0f} / ~423 МБ")
+            ))
 
         def _do():
-            for attempt in range(15):
+            _purge_cache(cache)
+            for attempt in range(3):
                 try:
+                    for fname, fsize in MODEL_FILES:
+                        dest = os.path.join(cache, fname)
+                        if os.path.isfile(dest) and os.path.getsize(dest) >= fsize * 0.99:
+                            downloaded_so_far[0] += fsize
+                            continue
+                        win.after(0, lambda n=fname:
+                            status_var.set(f"Загрузка {n}…"))
+                        _download_file_direct(
+                            f"{CDN}/{fname}", dest, fsize, on_progress)
+                        downloaded_so_far[0] += fsize
+
+                    # Загрузить модель (проверит контрольную сумму)
                     _gigaam.load_model(MODEL_NAME, device="cpu", download_root=cache)
                     result["path"] = cache
-                    done.set()
                     win.after(0, lambda: update_progress(1.0))
                     win.after(500, win.destroy)
                     return
+
                 except Exception as e:
                     err = str(e)
-                    # Битый кэш HuggingFace — чистим и повторяем
-                    if 'checksum' in err.lower() or 'hash' in err.lower():
-                        import shutil
-                        try: shutil.rmtree(cache)
-                        except: pass
-                        os.makedirs(cache, exist_ok=True)
-                    err = err[:50]
-                    if attempt < 14:
-                        win.after(0, lambda a=attempt, s=err:
-                            status_var.set(f"Повтор {a+2}/15… ({s})"))
-                        time.sleep(4)
+                    _purge_cache(cache)
+                    downloaded_so_far[0] = 0
+                    if attempt < 2:
+                        win.after(0, lambda a=attempt, s=err[:40]:
+                            status_var.set(f"Ошибка, повтор {a+2}/3… ({s})"))
+                        time.sleep(3)
                     else:
-                        done.set()
-                        win.after(0, lambda s=err: status_var.set(f"Ошибка: {s}"))
+                        win.after(0, lambda s=err[:60]:
+                            status_var.set(f"Не удалось скачать: {s}"))
                         win.after(0, lambda: btn_dl.config(state="normal"))
                         win.after(0, lambda: btn_br.config(state="normal"))
+                        win.after(0, lambda: btn_manual.pack(pady=(4, 0)))
 
-        threading.Thread(target=_monitor, daemon=True).start()
         threading.Thread(target=_do, daemon=True).start()
 
     btn_frame = tk.Frame(win, bg=BG)
@@ -166,6 +199,12 @@ def run_setup_wizard() -> str:
                        command=download, **btn_style)
     btn_dl.pack(side="left", padx=8)
 
+    btn_manual = tk.Button(win, text="Открыть ссылку в браузере",
+                           font=("Segoe UI", 9), relief="flat",
+                           fg=ACC, bg=BG, activeforeground=WHITE,
+                           activebackground=BG, cursor="hand2",
+                           command=lambda: _show_manual())
+
     win.protocol("WM_DELETE_WINDOW", sys.exit)
     win.mainloop()
 
@@ -179,25 +218,93 @@ if not model_exists(CACHE_DIR):
     CACHE_DIR = run_setup_wizard()
 
 print("Загрузка GigaAM v3...", flush=True)
-model = _gigaam.load_model(MODEL_NAME, device="cpu", download_root=CACHE_DIR)
+try:
+    model = _gigaam.load_model(MODEL_NAME, device="cpu", download_root=CACHE_DIR)
+except AssertionError:
+    # Модель повреждена — удалить и показать мастер повторно
+    for _fname in (f"{MODEL_NAME}.ckpt", f"{MODEL_NAME}_tokenizer.model"):
+        _fp = os.path.join(CACHE_DIR, _fname)
+        if os.path.isfile(_fp):
+            try:
+                os.unlink(_fp)
+            except Exception:
+                pass
+    CACHE_DIR = run_setup_wizard()
+    model = _gigaam.load_model(MODEL_NAME, device="cpu", download_root=CACHE_DIR)
 print("Готово. Right Ctrl — начать запись.", flush=True)
 
-recording   = False
-cancelled   = False
-current_rms = 0.0
-kb_ctrl     = keyboard.Controller()
-tr_lock     = threading.Lock()
+recording       = False
+cancelled       = False
+current_rms     = 0.0
+tr_lock         = threading.Lock()
+_target_hwnd    = None   # окно, которое было активно при старте записи
+
+import ctypes, ctypes.wintypes as _wt
+_u32 = ctypes.WinDLL('user32', use_last_error=True)
+_u32.GetForegroundWindow.restype   = _wt.HWND
+_u32.SetForegroundWindow.argtypes  = [_wt.HWND]
+_u32.SetForegroundWindow.restype   = _wt.BOOL
+
+def _send_unicode(text):
+    """Отправить текст через SendInput + KEYEVENTF_UNICODE — не зависит от раскладки."""
+    KEYEVENTF_UNICODE = 0x0004
+    KEYEVENTF_KEYUP   = 0x0002
+
+    class _KI(ctypes.Structure):
+        _fields_ = [("wVk", _wt.WORD), ("wScan", _wt.WORD),
+                    ("dwFlags", _wt.DWORD), ("time", _wt.DWORD),
+                    ("dwExtraInfo", ctypes.c_size_t)]
+
+    class _U(ctypes.Union):
+        _fields_ = [("ki", _KI), ("_pad", ctypes.c_byte * 32)]
+
+    class _INPUT(ctypes.Structure):
+        _fields_ = [("type", _wt.DWORD), ("u", _U)]
+
+    inputs = []
+    for ch in text:
+        cp = ord(ch)
+        scans = [cp] if cp < 0x10000 else [0xD800 | ((cp - 0x10000) >> 10),
+                                            0xDC00 | ((cp - 0x10000) & 0x3FF)]
+        for sc in scans:
+            for fl in (KEYEVENTF_UNICODE, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP):
+                u = _U(); u.ki = _KI(0, sc, fl, 0, 0)
+                inputs.append(_INPUT(1, u))
+
+    arr = (_INPUT * len(inputs))(*inputs)
+    _u32.SendInput(len(inputs), arr, ctypes.sizeof(_INPUT))
+
+
+def paste_text(text):
+    """Восстановить фокус и вставить текст через KEYEVENTF_UNICODE."""
+    hwnd = _target_hwnd
+    if hwnd:
+        _u32.SetForegroundWindow(hwnd)
+        time.sleep(0.35)
+    _send_unicode(text + " ")
 
 NOISE_Y = re.compile(r'(?:^|(?<= ))[ыЫ](?=[а-яёА-ЯЁ])')
 
 
 def clean(text):
+    _EN_SHORT = {'ok', 'hi', 'no', 'yes', 'wow', 'the', 'and', 'or', 'but',
+                 'in', 'on', 'at', 'to', 'for', 'lol', 'omg', 'bye'}
+
     def _filter_latin(m):
         w = m.group()
+<<<<<<< HEAD
         if any(c in 'aeiouAEIOU' for c in w) and len(w) >= 3:
+=======
+        if w.lower() in _EN_SHORT:
+            return w
+        vowels = sum(1 for c in w if c in 'aeiouAEIOU')
+        # Артефакты GigaAM обычно имеют не более 1 гласной — убираем их
+        if vowels >= 2 and len(w) >= 3:
+>>>>>>> 44d120d (refactor: переход на SendInput+KEYEVENTF_UNICODE, убраны неиспользуемые зависимости)
             return w
         return ''
     text = re.sub(r'[a-zA-Z]+', _filter_latin, text).strip()
+
     text = NOISE_Y.sub('', text).strip()
     text = re.sub(r' {2,}', ' ', text)
     return text.strip()
@@ -331,8 +438,8 @@ def transcribe_and_type(audio):
             result = model.transcribe(tmp)
             text = clean(result.text.strip())
             if text and not cancelled:
-                print(f"  → {text}", flush=True)
-                kb_ctrl.type(text + " ")
+                print(f"-> {text}", flush=True)
+                paste_text(text)
     finally:
         try: os.unlink(tmp)
         except: pass
@@ -376,11 +483,14 @@ def _stop_flush():
 
 def on_press(key):
     global recording, cancelled, _blocks, _silence
+
     if key == keyboard.Key.ctrl_r:
         if not recording:
             _blocks, _silence = [], 0
             cancelled = False
             recording = True
+            global _target_hwnd
+            _target_hwnd = _u32.GetForegroundWindow()
             overlay.show()
         else:
             cancelled = False
