@@ -19,29 +19,51 @@
 | Движок | GigaAM v3 `v3_e2e_ctc` | Хорошее качество RU с пунктуацией, локально, бесплатно |
 | Вставка текста | pynput.keyboard.type() | Без буфера обмена — главное требование |
 | Хоткей | Right Ctrl | Как в AquaVoice, привычно |
-| Чанки | Тишина 8×0.1с или MAX_BLOCKS=60 | Авто-сброс на паузах |
-| Оверлей | tkinter + -transparentcolor (#010101) | Таблетка с 5 анимированными полосками |
-| Распространение | .exe через PyInstaller --onefile | Без установки Python |
+| Чанки | Тишина 15×0.1с=1.5с или MAX_BLOCKS=150 | Не режет слова на границах |
+| Оверлей | tkinter + -transparentcolor + alpha=0.70 | 5 полосок без фона |
+| Распространение | .exe через PyInstaller (~170 МБ) | Без установки Python |
 | Автозагрузка | HKCU реестр | Без прав админа |
 | Один экземпляр | Windows CreateMutexW | Защита от двойного запуска |
 
 ---
 
-## Модель
+## Модель GigaAM
 
 - Файлы: `C:/gigaam_cache/v3_e2e_ctc.ckpt` (~422 МБ) + `v3_e2e_ctc_tokenizer.model`
-- Старый файл `v3_ctc.ckpt` (421 МБ) — можно удалить, не нужен
-- `model_exists()` проверяет **размер** файла (>1 МБ), не только наличие
+- `v3_ctc.ckpt` (421 МБ) — старая, можно удалить
+- `model_exists()` проверяет размер файла (>1 МБ), не только наличие
+- RAM в работе: ~1.5 ГБ
 
 ---
 
-## Артефакты распознавания и фиксы
+## Качество распознавания
 
-| Артефакт | Причина | Фикс |
-|----------|---------|------|
-| `ы` в начале чанка | Граница чанка | `NOISE_Y` regex |
-| `herez`, `hffr` латиница | Галлюцинации модели | `LATIN_NOISE` regex (нет гласных) |
-| Мелькающее окно при распознавании | subprocess PyInstaller | Патч `Popen.__init__` с `CREATE_NO_WINDOW` |
+- Нормализация аудио перед отправкой в модель — большой прирост качества
+- trim_start + trim_end — убирает тишину с обоих концов чанка
+- SILENCE_BLK=15 (1.5с) — не режет слова, постепенная вставка текста
+- Фильтр латинских артефактов: удаляет любое латинское слово без гласных или короче 3 букв
+- NOISE_Y regex: удаляет "ы" в начале чанка
+
+---
+
+## Архитектура аудио
+
+- `sd.InputStream` всегда открыт (нет задержки при старте записи)
+- При нажатии ctrl_r: очищаем буфер, ставим `recording=True`
+- `_audio_cb`: копит блоки, сбрасывает после 1.5с тишины или 15с
+- При остановке: 0.5с задержка → flush остатка → overlay.hide()
+
+---
+
+## Артефакты и фиксы
+
+| Артефакт | Фикс |
+|----------|------|
+| Мелькающее окно при распознавании | `subprocess.Popen` патч с `CREATE_NO_WINDOW` |
+| Проглатывание первых слов | `sd.InputStream` всегда открыт |
+| "ы" в начале чанка | NOISE_Y regex |
+| Латиница без гласных ("tfz", "sj") | Фильтр в `clean()` — lambda с проверкой гласных |
+| Пустые файлы от сорванной загрузки | Проверка размера в `model_exists()`, очистка перед загрузкой |
 
 ---
 
@@ -49,60 +71,34 @@
 
 ```
 --onefile --noconsole --name VoiceType
+--additional-hooks-dir=.        ← hook-torch.py исключает C++ заголовки
 --hidden-import=pystray._win32
---collect-all=gigaam
---collect-all=torch
---collect-all=torchaudio
---collect-all=onnxruntime
---collect-all=hydra
---collect-all=omegaconf
---hidden-import=sounddevice
---hidden-import=soundfile
---hidden-import=sentencepiece
---hidden-import=hydra._internal.utils
---hidden-import=hydra._internal.instantiate._internal.utils
+--collect-all=gigaam --collect-all=torch --collect-all=torchaudio
+--collect-all=onnxruntime --collect-all=hydra --collect-all=omegaconf
+--hidden-import=sounddevice --hidden-import=soundfile --hidden-import=sentencepiece
+--exclude-module=torch.testing --exclude-module=torch.distributed
+--exclude-module=torch.ao --exclude-module=torch.onnx --exclude-module=torch.fx
 ```
 
-Размер .exe: ~184 МБ. В git не коммитить (лимит GitHub 100 МБ).
-
----
-
-## Мастер первого запуска
-
-- Показывается если модель не найдена
-- "Выбрать папку" — указать существующую папку с моделью
-- "Скачать модель" — автоскачивание с повтором до 15 раз при обрыве
-- Прогресс по реальному размеру файла (без патча tqdm)
-
----
-
-## Файлы проекта
-
-| Файл | Назначение |
-|------|-----------|
-| `main.py` | Весь код приложения |
-| `voicetype.bat` | Запуск для разработки |
-| `test_gigaam.py` / `test_mic.bat` | Тест микрофона и модели |
-| `VOICE_README.md` | README утилиты |
-| `PLAN.md` | Чеклист разработки |
-| `TESTING.md` | Чеклист тестирования |
-| `knowledge/spec-voice-input.md` | Полная спецификация |
+Размер .exe: ~170 МБ. В git не коммитить (лимит GitHub 100 МБ).
 
 ---
 
 ## Статус на 2026-04-17
 
-**Проект завершён** — всё работает:
-- Распознавание с пунктуацией ✓
-- Оверлей с анимацией ✓
-- Трей-иконка + автозагрузка ✓
-- Мастер первого запуска ✓
-- .exe собран (184 МБ) ✓
-- Мелькающее окно убрано ✓
+**Проект завершён и работает хорошо.**
 
-**Возможные следующие шаги:**
+Протестировано на ноутбуке:
+- Распознавание с пунктуацией ✓
+- Скороговорки («Четыре чёрненьких...») ✓
+- Оверлей (только полоски, alpha=0.70) ✓
+- Трей + автозагрузка ✓
+- Мастер первого запуска с автоповтором ✓
+- .exe 170 МБ ✓
+
+**Осталось:**
+- Тест на Samsung Galaxy Tab Pro S (4 ГБ RAM, Core m3, Win10)
 - Удалить `C:/gigaam_cache/v3_ctc.ckpt` (421 МБ, не нужен)
-- Протестировать на планшете Samsung Galaxy Tab Pro S
 
 ---
 
@@ -112,3 +108,4 @@
 |------|------------|
 | 2026-04-16 | Развёртывание CC3, discovery interview, спецификация |
 | 2026-04-16–17 | Полная разработка: GigaAM, оверлей, трей, wizard, .exe |
+| 2026-04-17 | Нормализация аудио, постоянный поток, оверлей только полоски, фильтры артефактов |
