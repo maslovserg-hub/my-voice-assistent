@@ -34,8 +34,8 @@ MODEL_NAME    = "v3_e2e_ctc"
 SAMPLE_RATE   = 16000
 BLOCKSIZE     = 1600
 SILENCE_TH    = 0.018
-SILENCE_BLK   = 8
-MAX_BLOCKS    = 60
+SILENCE_BLK   = 15   # 1.5 сек тишины → сброс чанка
+MAX_BLOCKS    = 150  # 15 сек максимум на чанк
 
 # ── Мастер первого запуска ────────────────────────────────────────────────────
 import gigaam as _gigaam
@@ -200,14 +200,22 @@ def trim_end(audio, thr=SILENCE_TH):
     if last is None: return np.array([], dtype=np.float32)
     return audio[:(len(rms)-last)*BLOCKSIZE]
 
+def trim_start(audio, thr=SILENCE_TH):
+    rms = [np.sqrt(np.mean(audio[i:i+BLOCKSIZE]**2))
+           for i in range(0, len(audio), BLOCKSIZE)]
+    first = next((i for i, r in enumerate(rms) if r >= thr), None)
+    if first is None: return np.array([], dtype=np.float32)
+    return audio[first*BLOCKSIZE:]
+
 # ── Оверлей ──────────────────────────────────────────────────────────────────
 class Overlay:
-    W, H   = 80, 34
+    W, H   = 72, 38
     TRANSP = "#010101"
-    PILL   = "#1e1e35"
-    ACCENT = "#e05a00"
-    GRAY   = "#3a3a55"
+    BG     = "#1a1a35"
+    ACCENT = "#ff6b00"
+    GRAY   = "#3a3a60"
     N_BARS = 5
+    BAR_W  = 3
 
     def __init__(self):
         self.root = tk.Tk()
@@ -215,46 +223,40 @@ class Overlay:
         self.root.attributes("-topmost", True)
         self.root.configure(bg=self.TRANSP)
         self.root.wm_attributes("-transparentcolor", self.TRANSP)
+        self.root.wm_attributes("-alpha", 0.70)
         self.root.withdraw()
 
         self.cv = tk.Canvas(self.root, width=self.W, height=self.H,
                             bg=self.TRANSP, highlightthickness=0)
         self.cv.pack()
 
-        self._draw_pill()
-
-        # Полоски — тонкие (3px), по центру таблетки
         self.bars = []
-        total = self.N_BARS * 3 + (self.N_BARS - 1) * 7  # 5*3 + 4*7 = 43px
+        total = self.N_BARS * self.BAR_W + (self.N_BARS - 1) * 5
         x0 = (self.W - total) // 2
         for i in range(self.N_BARS):
-            b = self.cv.create_rectangle(
-                x0+i*10, self.H//2-1, x0+i*10+3, self.H//2+1,
-                fill=self.GRAY, outline="", tags="bar"
-            )
+            x = x0 + i * (self.BAR_W + 5)
+            cy = self.H // 2
+            b = self.cv.create_rectangle(x, cy-1, x+self.BAR_W, cy+1,
+                                         fill=self.GRAY, outline="", tags="bar")
             self.bars.append(b)
 
-        # Перетаскивание
         self.cv.bind("<ButtonPress-1>", self._ds)
         self.cv.bind("<B1-Motion>",     self._dm)
         self._dx = self._dy = 0
 
-        # Позиция: центр экрана, над панелью задач
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
         self.root.geometry(f"{self.W}x{self.H}+{(sw-self.W)//2}+{sh-self.H-64}")
 
-        self._mic_active = False  # микрофон слушает?
+        self._mic_active = False
         self._phase = 0.0
         self._q = []
         self._poll()
         self._anim()
 
-    def _draw_pill(self):
-        W, H, r = self.W, self.H, self.H // 2
-        self.cv.create_oval(0, 0, r*2, H, fill=self.PILL, outline="")
-        self.cv.create_oval(W-r*2, 0, W, H, fill=self.PILL, outline="")
-        self.cv.create_rectangle(r, 0, W-r, H, fill=self.PILL, outline="")
+    def _draw_bg(self):
+        self.cv.create_oval(1, 1, self.W-1, self.H-1,
+                            fill=self.BG, outline="")
 
     def _ds(self, e): self._dx, self._dy = e.x_root, e.y_root
     def _dm(self, e):
@@ -281,23 +283,27 @@ class Overlay:
         self.call(_u)
 
     def _anim(self):
-        self._phase += 0.28
-        mh = self.H // 2 - 5
+        self._phase += 0.25
+        mh = self.H // 2 - 4
+        total = self.N_BARS * self.BAR_W + (self.N_BARS - 1) * 8
+        x0 = (self.W - total) // 2
 
+        total = self.N_BARS * self.BAR_W + (self.N_BARS - 1) * 5
+        x0 = (self.W - total) // 2
         for i, b in enumerate(self.bars):
+            x = x0 + i * (self.BAR_W + 5)
+            cy = self.H // 2
             if self._mic_active:
-                lvl = min(current_rms * 20 + 0.15, 1.0)
-                h = max(1, int(mh * lvl * abs(math.sin(self._phase + i * 1.1))))
+                lvl = min(current_rms * 22 + 0.18, 1.0)
+                h = max(2, int(mh * lvl * abs(math.sin(self._phase + i * 1.2))))
                 color = self.ACCENT
             else:
-                h = 1
+                h = 2
                 color = self.GRAY
-
-            cx = 16 + i * 10 + 1
-            self.cv.coords(b, cx, self.H//2-h, cx+3, self.H//2+h)
+            self.cv.coords(b, x, cy - h, x + self.BAR_W, cy + h)
             self.cv.itemconfig(b, fill=color)
 
-        self.root.after(50, self._anim)
+        self.root.after(45, self._anim)
 
     def run(self): self.root.mainloop()
 
@@ -310,6 +316,7 @@ def normalize(audio):
 
 def transcribe_and_type(audio):
     global cancelled
+    audio = trim_start(audio)
     audio = trim_end(audio)
     if len(audio) < SAMPLE_RATE * 0.3:
         return
