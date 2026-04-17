@@ -33,7 +33,7 @@ DEFAULT_CACHE = "C:/gigaam_cache"
 MODEL_NAME    = "v3_e2e_ctc"
 SAMPLE_RATE   = 16000
 BLOCKSIZE     = 1600
-SILENCE_TH    = 0.018
+SILENCE_TH    = 0.004
 SILENCE_BLK   = 15   # 1.5 сек тишины → сброс чанка
 MAX_BLOCKS    = 150  # 15 сек максимум на чанк
 
