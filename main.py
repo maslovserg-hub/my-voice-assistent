@@ -181,14 +181,16 @@ current_rms = 0.0
 kb_ctrl     = keyboard.Controller()
 tr_lock     = threading.Lock()
 
-VOWELS = set('aeiouAEIOU')
-# Артефакт: одна буква ИЛИ слово без единой гласной
-LATIN_NOISE = re.compile(r'\b([a-zA-Z]|[b-df-hj-np-tv-xzwqB-DF-HJ-NP-TV-XZW]{2,})\b')
 NOISE_Y = re.compile(r'(?:^|(?<= ))[ыЫ](?=[а-яёА-ЯЁ])')
 
 def clean(text):
-    # Убираем только явный латинский мусор (нет гласных или одна буква)
-    text = LATIN_NOISE.sub('', text).strip()
+    def _filter_latin(m):
+        w = m.group()
+        # Оставляем только латинские слова с гласными (настоящий английский)
+        if any(c in 'aeiouAEIOU' for c in w) and len(w) >= 3:
+            return w
+        return ''
+    text = re.sub(r'[a-zA-Z]+', _filter_latin, text).strip()
     text = NOISE_Y.sub('', text).strip()
     text = re.sub(r' {2,}', ' ', text)
     return text
