@@ -130,7 +130,14 @@ def run_setup_wizard() -> str:
                     win.after(500, win.destroy)
                     return
                 except Exception as e:
-                    err = str(e)[:50]
+                    err = str(e)
+                    # Битый кэш HuggingFace — чистим и повторяем
+                    if 'checksum' in err.lower() or 'hash' in err.lower():
+                        import shutil
+                        try: shutil.rmtree(cache)
+                        except: pass
+                        os.makedirs(cache, exist_ok=True)
+                    err = err[:50]
                     if attempt < 14:
                         win.after(0, lambda a=attempt, s=err:
                             status_var.set(f"Повтор {a+2}/15… ({s})"))
@@ -202,12 +209,6 @@ def trim_end(audio, thr=SILENCE_TH * 0.4):
     if last is None: return np.array([], dtype=np.float32)
     return audio[:(len(rms)-last)*BLOCKSIZE]
 
-def trim_start(audio, thr=SILENCE_TH):
-    rms = [np.sqrt(np.mean(audio[i:i+BLOCKSIZE]**2))
-           for i in range(0, len(audio), BLOCKSIZE)]
-    first = next((i for i, r in enumerate(rms) if r >= thr), None)
-    if first is None: return np.array([], dtype=np.float32)
-    return audio[first*BLOCKSIZE:]
 
 # ── Оверлей ──────────────────────────────────────────────────────────────────
 class Overlay:
