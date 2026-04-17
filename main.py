@@ -183,19 +183,19 @@ tr_lock     = threading.Lock()
 
 NOISE_Y = re.compile(r'(?:^|(?<= ))[ыЫ](?=[а-яёА-ЯЁ])')
 
+
 def clean(text):
     def _filter_latin(m):
         w = m.group()
-        # Оставляем только латинские слова с гласными (настоящий английский)
         if any(c in 'aeiouAEIOU' for c in w) and len(w) >= 3:
             return w
         return ''
     text = re.sub(r'[a-zA-Z]+', _filter_latin, text).strip()
     text = NOISE_Y.sub('', text).strip()
     text = re.sub(r' {2,}', ' ', text)
-    return text
+    return text.strip()
 
-def trim_end(audio, thr=SILENCE_TH):
+def trim_end(audio, thr=SILENCE_TH * 0.4):
     rms = [np.sqrt(np.mean(audio[i:i+BLOCKSIZE]**2))
            for i in range(0, len(audio), BLOCKSIZE)]
     last = next((i for i,r in enumerate(reversed(rms)) if r >= thr), None)
@@ -318,7 +318,6 @@ def normalize(audio):
 
 def transcribe_and_type(audio):
     global cancelled
-    audio = trim_start(audio)
     audio = trim_end(audio)
     if len(audio) < SAMPLE_RATE * 0.3:
         return
