@@ -328,65 +328,59 @@ def transcribe_and_type(audio):
         try: os.unlink(tmp)
         except: pass
 
+_blocks   = []
+_silence  = 0
+
+def _flush():
+    global _blocks, _silence
+    if _blocks:
+        audio = np.concatenate(_blocks)
+        threading.Thread(target=transcribe_and_type, args=(audio,), daemon=True).start()
+    _blocks, _silence = [], 0
+
+def _audio_cb(indata, frames, t, status):
+    global current_rms, _blocks, _silence
+    blk = indata[:, 0].copy()
+    rms = float(np.sqrt(np.mean(blk ** 2)))
+    current_rms = rms if recording else 0.0
+    if not recording:
+        return
+    _blocks.append(blk)
+    _silence = _silence + 1 if rms < SILENCE_TH else 0
+    if _silence >= SILENCE_BLK or len(_blocks) >= MAX_BLOCKS:
+        _flush()
+
 def cancel_and_stop():
     global recording, cancelled
     cancelled = True
     recording = False
 
-def record_loop():
-    global recording, current_rms
-    blocks, silence = [], 0
-
-    def flush():
-        nonlocal blocks, silence
-        if blocks:
-            audio = np.concatenate(blocks)
-            threading.Thread(target=transcribe_and_type, args=(audio,), daemon=True).start()
-        blocks, silence = [], 0
-
-    def cb(indata, frames, t, status):
-        nonlocal blocks, silence
-        global current_rms
-        if not recording: return
-        blk = indata[:,0].copy()
-        blocks.append(blk)
-        rms = float(np.sqrt(np.mean(blk**2)))
-        current_rms = rms
-        silence = silence+1 if rms < SILENCE_TH else 0
-        if silence >= SILENCE_BLK or len(blocks) >= MAX_BLOCKS:
-            flush()
-
-    with sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
-                        blocksize=BLOCKSIZE, dtype="float32", callback=cb):
-        while recording:
-            time.sleep(0.05)
-
-    current_rms = 0.0
+def _stop_flush():
     time.sleep(0.5)
-    if blocks:
-        audio = np.concatenate(blocks)
-        transcribe_and_type(audio)
-
+    if not cancelled:
+        _flush()
+    else:
+        global _blocks, _silence
+        _blocks, _silence = [], 0
     overlay.hide()
     print("Остановлено.", flush=True)
 
-record_thread = None
-
 def on_press(key):
-    global recording, cancelled, record_thread
+    global recording, cancelled, _blocks, _silence
     if key == keyboard.Key.ctrl_r:
         if not recording:
+            _blocks, _silence = [], 0
             cancelled = False
             recording = True
             overlay.show()
-            record_thread = threading.Thread(target=record_loop, daemon=True)
-            record_thread.start()
         else:
             cancelled = False
             recording = False
+            threading.Thread(target=_stop_flush, daemon=True).start()
     elif key == keyboard.Key.esc:
         if recording:
             cancel_and_stop()
+            threading.Thread(target=_stop_flush, daemon=True).start()
 
 def hotkey_thread():
     with keyboard.Listener(on_press=on_press) as l:
@@ -467,4 +461,11 @@ def tray_thread():
 
 threading.Thread(target=hotkey_thread, daemon=True).start()
 threading.Thread(target=tray_thread, daemon=True).start()
+
+# Поток микрофона всегда открыт — нет задержки при старте записи
+_mic_stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
+                              blocksize=BLOCKSIZE, dtype="float32",
+                              callback=_audio_cb)
+_mic_stream.start()
+
 overlay.run()
