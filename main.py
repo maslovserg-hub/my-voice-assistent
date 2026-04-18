@@ -245,6 +245,8 @@ except AssertionError:
                 pass
     CACHE_DIR = run_setup_wizard()
     model = _gigaam.load_model(MODEL_NAME, device="cpu", download_root=CACHE_DIR)
+import torch as _torch_q
+_torch_q.quantization.quantize_dynamic(model, {_torch_q.nn.Linear}, dtype=_torch_q.qint8, inplace=True)
 print("Готово. Right Ctrl — начать запись.", flush=True)
 
 recording       = False
