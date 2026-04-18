@@ -27,7 +27,13 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        # Другие ML-фреймворки (точно не нужны)
+        'torchvision', 'torchtext', 'torchrec',
+        # Стандартная библиотека — точно не используется
+        'lib2to3', 'ftplib', 'imaplib', 'smtplib',
+        'poplib', 'nntplib', 'telnetlib',
+    ],
     noarchive=False,
     optimize=0,
 )
@@ -36,14 +42,12 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
     name='VoiceType',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
@@ -52,4 +56,13 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    name='VoiceType',
 )
