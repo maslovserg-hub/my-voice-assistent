@@ -29,6 +29,11 @@ from pynput import keyboard
 from PIL import Image, ImageDraw
 import pystray
 
+_LOG = os.path.join(os.path.expanduser("~"), "voicetype_debug.log")
+def _log(msg):
+    with open(_LOG, "a", encoding="utf-8") as f:
+        f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
+
 DEFAULT_CACHE = "C:/gigaam_cache"
 MODEL_NAME    = "v3_e2e_ctc"
 SAMPLE_RATE   = 16000
@@ -36,6 +41,15 @@ BLOCKSIZE     = 1600
 SILENCE_TH    = 0.004
 SILENCE_BLK   = 15   # 1.5 сек тишины → сброс чанка
 MAX_BLOCKS    = 150  # 15 сек максимум на чанк
+
+# CPU torchaudio требует torchcodec которого нет — заменяем load на soundfile
+import torchaudio as _torchaudio
+import soundfile as _sf
+import torch as _torch
+def _sf_load(path, normalize=True, **kw):
+    data, sr = _sf.read(str(path), dtype='float32', always_2d=True)
+    return _torch.from_numpy(data.T), sr
+_torchaudio.load = _sf_load
 
 # ── Мастер первого запуска ────────────────────────────────────────────────────
 import gigaam as _gigaam
@@ -241,9 +255,15 @@ _target_hwnd    = None   # окно, которое было активно пр
 
 import ctypes, ctypes.wintypes as _wt
 _u32 = ctypes.WinDLL('user32', use_last_error=True)
-_u32.GetForegroundWindow.restype   = _wt.HWND
-_u32.SetForegroundWindow.argtypes  = [_wt.HWND]
-_u32.SetForegroundWindow.restype   = _wt.BOOL
+_u32.GetForegroundWindow.restype                  = _wt.HWND
+_u32.SetForegroundWindow.argtypes                 = [_wt.HWND]
+_u32.SetForegroundWindow.restype                  = _wt.BOOL
+_u32.BringWindowToTop.argtypes                    = [_wt.HWND]
+_u32.BringWindowToTop.restype                     = _wt.BOOL
+_u32.GetWindowThreadProcessId.argtypes            = [_wt.HWND, ctypes.POINTER(_wt.DWORD)]
+_u32.GetWindowThreadProcessId.restype             = _wt.DWORD
+_u32.AttachThreadInput.argtypes                   = [_wt.DWORD, _wt.DWORD, _wt.BOOL]
+_u32.AttachThreadInput.restype                    = _wt.BOOL
 
 def _send_unicode(text):
     """Отправить текст через SendInput + KEYEVENTF_UNICODE — не зависит от раскладки."""
@@ -275,13 +295,29 @@ def _send_unicode(text):
     _u32.SendInput(len(inputs), arr, ctypes.sizeof(_INPUT))
 
 
-def paste_text(text):
-    """Восстановить фокус и вставить текст через KEYEVENTF_UNICODE."""
-    hwnd = _target_hwnd
-    if hwnd:
+def _force_foreground(hwnd):
+    """SetForegroundWindow надёжно работает только из foreground-треда — используем AttachThreadInput."""
+    k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    cur  = k32.GetCurrentThreadId()
+    fg   = _u32.GetForegroundWindow()
+    fg_t = _u32.GetWindowThreadProcessId(fg, None)
+    if fg_t and fg_t != cur:
+        _u32.AttachThreadInput(cur, fg_t, True)
         _u32.SetForegroundWindow(hwnd)
+        _u32.BringWindowToTop(hwnd)
+        _u32.AttachThreadInput(cur, fg_t, False)
+    else:
+        _u32.SetForegroundWindow(hwnd)
+
+def paste_text(text):
+    hwnd = _target_hwnd
+    _log(f"paste hwnd={hwnd} fg={_u32.GetForegroundWindow()}")
+    if hwnd:
+        r = _force_foreground(hwnd)
         time.sleep(0.35)
+        _log(f"after SetFG fg={_u32.GetForegroundWindow()} expected={hwnd}")
     _send_unicode(text + " ")
+    _log(f"SendInput done for {text!r}")
 
 NOISE_Y = re.compile(r'(?:^|(?<= ))[ыЫ](?=[а-яёА-ЯЁ])')
 
@@ -292,15 +328,10 @@ def clean(text):
 
     def _filter_latin(m):
         w = m.group()
-<<<<<<< HEAD
-        if any(c in 'aeiouAEIOU' for c in w) and len(w) >= 3:
-=======
         if w.lower() in _EN_SHORT:
             return w
         vowels = sum(1 for c in w if c in 'aeiouAEIOU')
-        # Артефакты GigaAM обычно имеют не более 1 гласной — убираем их
         if vowels >= 2 and len(w) >= 3:
->>>>>>> 44d120d (refactor: переход на SendInput+KEYEVENTF_UNICODE, убраны неиспользуемые зависимости)
             return w
         return ''
     text = re.sub(r'[a-zA-Z]+', _filter_latin, text).strip()
@@ -395,9 +426,6 @@ class Overlay:
     def _anim(self):
         self._phase += 0.25
         mh = self.H // 2 - 4
-        total = self.N_BARS * self.BAR_W + (self.N_BARS - 1) * 8
-        x0 = (self.W - total) // 2
-
         total = self.N_BARS * self.BAR_W + (self.N_BARS - 1) * 5
         x0 = (self.W - total) // 2
         for i, b in enumerate(self.bars):
@@ -436,7 +464,9 @@ def transcribe_and_type(audio):
         sf.write(tmp, audio, SAMPLE_RATE, subtype="PCM_16")
         with tr_lock:
             result = model.transcribe(tmp)
-            text = clean(result.text.strip())
+            raw  = result.text.strip()
+            text = clean(raw)
+            _log(f"raw={raw!r} clean={text!r} cancelled={cancelled} hwnd={_target_hwnd}")
             if text and not cancelled:
                 print(f"-> {text}", flush=True)
                 paste_text(text)
