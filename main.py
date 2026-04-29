@@ -372,6 +372,9 @@ def _force_foreground(hwnd):
         _u32.SetForegroundWindow(hwnd)
 
 
+TYPE_WORD_DELAY = 0.05
+
+
 def paste_text(text):
     hwnd = _target_hwnd
     fg   = _u32.GetForegroundWindow()
@@ -382,11 +385,16 @@ def paste_text(text):
         _log(f"after SetFG fg={_u32.GetForegroundWindow()} expected={hwnd}")
 
     saved = _clipboard_get_text()
-    if not _clipboard_set_text(text + " "):
-        _log("clipboard set failed")
-        return
-    _send_ctrl_v()
-    _log(f"Ctrl+V sent for {text!r}")
+    words = text.split(' ')
+    chunks = [w + ' ' for w in words if w]
+    _log(f"typing {len(chunks)} chunks for {text!r}")
+    for i, chunk in enumerate(chunks):
+        if not _clipboard_set_text(chunk):
+            _log("clipboard set failed mid-typing")
+            break
+        _send_ctrl_v()
+        if i < len(chunks) - 1:
+            time.sleep(TYPE_WORD_DELAY)
 
     def _restore():
         time.sleep(0.25)
