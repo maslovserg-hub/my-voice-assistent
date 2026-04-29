@@ -257,6 +257,7 @@ _target_hwnd    = None   # окно, которое было активно пр
 
 import ctypes, ctypes.wintypes as _wt
 _u32 = ctypes.WinDLL('user32', use_last_error=True)
+_k32 = ctypes.WinDLL('kernel32', use_last_error=True)
 _u32.GetForegroundWindow.restype                  = _wt.HWND
 _u32.SetForegroundWindow.argtypes                 = [_wt.HWND]
 _u32.SetForegroundWindow.restype                  = _wt.BOOL
@@ -266,41 +267,100 @@ _u32.GetWindowThreadProcessId.argtypes            = [_wt.HWND, ctypes.POINTER(_w
 _u32.GetWindowThreadProcessId.restype             = _wt.DWORD
 _u32.AttachThreadInput.argtypes                   = [_wt.DWORD, _wt.DWORD, _wt.BOOL]
 _u32.AttachThreadInput.restype                    = _wt.BOOL
+_u32.OpenClipboard.argtypes                       = [_wt.HWND]
+_u32.OpenClipboard.restype                        = _wt.BOOL
+_u32.CloseClipboard.restype                       = _wt.BOOL
+_u32.EmptyClipboard.restype                       = _wt.BOOL
+_u32.GetClipboardData.argtypes                    = [_wt.UINT]
+_u32.GetClipboardData.restype                     = _wt.HANDLE
+_u32.SetClipboardData.argtypes                    = [_wt.UINT, _wt.HANDLE]
+_u32.SetClipboardData.restype                     = _wt.HANDLE
+_k32.GlobalAlloc.argtypes                         = [_wt.UINT, ctypes.c_size_t]
+_k32.GlobalAlloc.restype                          = _wt.HANDLE
+_k32.GlobalLock.argtypes                          = [_wt.HANDLE]
+_k32.GlobalLock.restype                           = ctypes.c_void_p
+_k32.GlobalUnlock.argtypes                        = [_wt.HANDLE]
+_k32.GlobalUnlock.restype                         = _wt.BOOL
+_k32.GlobalFree.argtypes                          = [_wt.HANDLE]
+_k32.GlobalFree.restype                           = _wt.HANDLE
 
-def _send_unicode(text):
-    """Отправить текст через SendInput + KEYEVENTF_UNICODE — не зависит от раскладки."""
-    KEYEVENTF_UNICODE = 0x0004
-    KEYEVENTF_KEYUP   = 0x0002
+class _KI(ctypes.Structure):
+    _fields_ = [("wVk", _wt.WORD), ("wScan", _wt.WORD),
+                ("dwFlags", _wt.DWORD), ("time", _wt.DWORD),
+                ("dwExtraInfo", ctypes.c_size_t)]
 
-    class _KI(ctypes.Structure):
-        _fields_ = [("wVk", _wt.WORD), ("wScan", _wt.WORD),
-                    ("dwFlags", _wt.DWORD), ("time", _wt.DWORD),
-                    ("dwExtraInfo", ctypes.c_size_t)]
+class _IU(ctypes.Union):
+    _fields_ = [("ki", _KI), ("_pad", ctypes.c_byte * 32)]
 
-    class _U(ctypes.Union):
-        _fields_ = [("ki", _KI), ("_pad", ctypes.c_byte * 32)]
+class _INPUT(ctypes.Structure):
+    _fields_ = [("type", _wt.DWORD), ("u", _IU)]
 
-    class _INPUT(ctypes.Structure):
-        _fields_ = [("type", _wt.DWORD), ("u", _U)]
+CF_UNICODETEXT = 13
+GMEM_MOVEABLE  = 0x0002
 
+
+def _clipboard_get_text():
+    """Прочитать текущий текст из буфера обмена (CF_UNICODETEXT). None если буфер не текстовый."""
+    if not _u32.OpenClipboard(None):
+        return None
+    try:
+        h = _u32.GetClipboardData(CF_UNICODETEXT)
+        if not h:
+            return None
+        ptr = _k32.GlobalLock(h)
+        if not ptr:
+            return None
+        try:
+            return ctypes.wstring_at(ptr)
+        finally:
+            _k32.GlobalUnlock(h)
+    finally:
+        _u32.CloseClipboard()
+
+
+def _clipboard_set_text(text):
+    """Положить текст в буфер обмена (CF_UNICODETEXT)."""
+    data = (text + '\0').encode('utf-16-le')
+    h = _k32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+    if not h:
+        return False
+    ptr = _k32.GlobalLock(h)
+    if not ptr:
+        _k32.GlobalFree(h)
+        return False
+    ctypes.memmove(ptr, data, len(data))
+    _k32.GlobalUnlock(h)
+    if not _u32.OpenClipboard(None):
+        _k32.GlobalFree(h)
+        return False
+    try:
+        _u32.EmptyClipboard()
+        if not _u32.SetClipboardData(CF_UNICODETEXT, h):
+            _k32.GlobalFree(h)
+            return False
+        return True
+    finally:
+        _u32.CloseClipboard()
+
+
+def _send_ctrl_v():
+    """SendInput Ctrl+V — Punto и подобные перехватчики на это не реагируют."""
+    KEYEVENTF_KEYUP = 0x0002
+    VK_CONTROL = 0x11
+    VK_V       = 0x56
+    seq = [(VK_CONTROL, 0), (VK_V, 0),
+           (VK_V, KEYEVENTF_KEYUP), (VK_CONTROL, KEYEVENTF_KEYUP)]
     inputs = []
-    for ch in text:
-        cp = ord(ch)
-        scans = [cp] if cp < 0x10000 else [0xD800 | ((cp - 0x10000) >> 10),
-                                            0xDC00 | ((cp - 0x10000) & 0x3FF)]
-        for sc in scans:
-            for fl in (KEYEVENTF_UNICODE, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP):
-                u = _U(); u.ki = _KI(0, sc, fl, 0, 0)
-                inputs.append(_INPUT(1, u))
-
+    for vk, fl in seq:
+        u = _IU(); u.ki = _KI(vk, 0, fl, 0, 0)
+        inputs.append(_INPUT(1, u))
     arr = (_INPUT * len(inputs))(*inputs)
     _u32.SendInput(len(inputs), arr, ctypes.sizeof(_INPUT))
 
 
 def _force_foreground(hwnd):
     """SetForegroundWindow надёжно работает только из foreground-треда — используем AttachThreadInput."""
-    k32 = ctypes.WinDLL('kernel32', use_last_error=True)
-    cur  = k32.GetCurrentThreadId()
+    cur  = _k32.GetCurrentThreadId()
     fg   = _u32.GetForegroundWindow()
     fg_t = _u32.GetWindowThreadProcessId(fg, None)
     if fg_t and fg_t != cur:
@@ -311,15 +371,28 @@ def _force_foreground(hwnd):
     else:
         _u32.SetForegroundWindow(hwnd)
 
+
 def paste_text(text):
     hwnd = _target_hwnd
-    _log(f"paste hwnd={hwnd} fg={_u32.GetForegroundWindow()}")
-    if hwnd:
-        r = _force_foreground(hwnd)
-        time.sleep(0.35)
+    fg   = _u32.GetForegroundWindow()
+    _log(f"paste hwnd={hwnd} fg={fg}")
+    if hwnd and fg != hwnd:
+        _force_foreground(hwnd)
+        time.sleep(0.1)
         _log(f"after SetFG fg={_u32.GetForegroundWindow()} expected={hwnd}")
-    _send_unicode(text + " ")
-    _log(f"SendInput done for {text!r}")
+
+    saved = _clipboard_get_text()
+    if not _clipboard_set_text(text + " "):
+        _log("clipboard set failed")
+        return
+    _send_ctrl_v()
+    _log(f"Ctrl+V sent for {text!r}")
+
+    def _restore():
+        time.sleep(0.25)
+        if saved is not None:
+            _clipboard_set_text(saved)
+    threading.Thread(target=_restore, daemon=True).start()
 
 NOISE_Y = re.compile(r'(?:^|(?<= ))[ыЫ](?=[а-яёА-ЯЁ])')
 
