@@ -7,3 +7,7 @@ __pycache__/
 *.pyd
 *.egg-info/
 .env
+GigaAM/
+.vscode/
+upx.zip
+upx_tmp/
